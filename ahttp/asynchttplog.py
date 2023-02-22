@@ -9,20 +9,17 @@ from typing import Optional
 class AsyncLogger:
     def __init__(self, log_file: Optional[str], verbose: bool = False) -> None:
 
-        if (log_file is not None):
-            script_root = os.path.abspath(os.path.dirname(sys.argv[0]))
-            self.log_file = os.path.join(script_root, "tv.log")
-
-            logging.basicConfig(filename=self.log_file,
+        if (log_file is not None or True == verbose):
+            logging.basicConfig(filename=log_file,
                                 filemode='a',
                                 format='%(asctime)s %(message)s',
                                 datefmt='%H:%M:%S',
                                 level=logging.DEBUG)
 
-            self.logger = logging.getLogger("tv")
+            self.logger = logging.getLogger("ahttp")
             self.logger_lock = threading.Lock()
 
-            if (True == verbose):
+            if (True == verbose and log_file is not None):
                 self.logger.addHandler(logging.StreamHandler(sys.stdout))
         else:
             self.logger = None

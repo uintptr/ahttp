@@ -368,7 +368,7 @@ class AsyncHttpCache(StreamWriter):
 
 
 class AsyncHttpServer():
-    def __init__(self, addr: str = "0.0.0.0", port: int = 8080, log_file: Optional[str] = None) -> None:
+    def __init__(self, addr: str = "0.0.0.0", port: int = 8080, log_file: Optional[str] = None, verbose: bool = False) -> None:
         self.addr = addr
         self.port = port
         self.routes: List[AsyncHttpRoute] = []
@@ -377,7 +377,7 @@ class AsyncHttpServer():
         self.cache = {}
         self.cache_enabled = True
 
-        self.logger = AsyncLogger(log_file)
+        self.logger = AsyncLogger(log_file, verbose=verbose)
 
     async def _read_header(self, reader: StreamReader) -> bytes:
 

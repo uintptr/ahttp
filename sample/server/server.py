@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from ahttp import AsyncHttpServer, AsyncHttpRequest
 import sys
 import os
 import asyncio
@@ -6,8 +7,6 @@ import asyncio
 # add the pkg in the search path since it's probably not installed
 script_root = os.path.dirname(os.path.abspath(sys.argv[0]))
 sys.path.append(os.path.join(script_root, "..", ".."))
-
-from ahttp import AsyncHttpServer, AsyncHttpRequest
 
 
 class SampleHttpHandler:
@@ -40,7 +39,7 @@ async def run_server() -> None:
 
     handler = SampleHttpHandler()
 
-    server = AsyncHttpServer()
+    server = AsyncHttpServer(verbose=True)
 
     api_list = [
         server.get("/api/test", handler.api_test)
