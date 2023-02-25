@@ -56,8 +56,12 @@ class AsyncHttpArgs():
         except:
             return False
 
+    def merge(self, args: 'AsyncHttpArgs') -> None:
+        for k in args.args:
+            self.args[k] = args.get(k)
+
     def set(self, k: str, v: str) -> None:
-        self.args[k] = v
+        self.args[k.lower()] = v
 
     def get_url(self, k: str, default="", mandatory: bool = False) -> str:
         # validate that the url is valid
@@ -75,6 +79,8 @@ class AsyncHttpArgs():
 
     def get(self, k: str, default: str = "", mandatory: bool = False) -> str:
 
+        k = k.lower()
+
         if (k in self.args):
             return self.args[k]
 
@@ -84,6 +90,7 @@ class AsyncHttpArgs():
         return default
 
     def get_int(self, k: str, default: int = -1, mandatory: bool = False) -> int:
+        k = k.lower()
         if (k in self.args):
             return int(self.args[k])
 
@@ -93,6 +100,7 @@ class AsyncHttpArgs():
         return default
 
     def get_float(self, k: str, default: float = 0, mandatory: bool = False) -> float:
+        k = k.lower()
         if (k in self.args):
             return float(self.args[k])
 

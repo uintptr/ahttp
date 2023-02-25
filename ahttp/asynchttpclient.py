@@ -1,54 +1,62 @@
 
-import asyncio
 import sys
-from typing import Union, Tuple, AsyncGenerator
-from asyncio import StreamReader, StreamWriter
 import ssl
-import io
-from http.client import HTTPResponse
-import socket
-from urllib.parse import urlparse
+import asyncio
+
+import urllib.parse
+
 from http import HTTPStatus
 
-from .asynchttpcommon import AsyncHttpArgs, AsyncHttpException
+from .asynchttpcommon import AsyncHttpArgs
 
-DEF_READ_CHUNK_SIZE = 1024
-
-
-class FakeSocket():
-    def __init__(self, response_bytes) -> None:
-        self._file = io.BytesIO(response_bytes)
-
-    def makefile(self, *args, **kwargs) -> io.BytesIO:
-        return self._file
+DEF_IO_SIZE = (8 * 1024)
 
 
-class AsyncHttpConnection():
-    def __init__(self, url: str) -> None:
-        self.reader: StreamReader
-        self.writer: Union[StreamWriter, None] = None
-        self.q = urlparse(url)
-        self.args = AsyncHttpArgs()
-        self.response_bytes = b''
+class AsyncHttpConnection:
+    def __init__(self, host: str, port: int, secure: bool) -> None:
+        self.host = host
+        self.port = port
+        self.secure = secure
 
         ver = sys.version_info
         self.ua = f"Python/{ver.major}.{ver.minor}.{ver.micro}"
 
-        if (None == self.q.port):
-            if ("https" == self.q.scheme):
-                self.port = 443
-            else:
-                self.port = 80
+    async def __aenter__(self) -> 'AsyncHttpConnection':
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
+
+    ############################################################################
+    # PUBLIC METHODS
+    ############################################################################
+
+    async def send_request(self, method: str, query: str, user_args: AsyncHttpArgs, http_version: str = "1.0") -> None:
+
+        args = AsyncHttpArgs()
+
+        if (self.port != 80 and self.port != 443):
+            args.set("Host", f"{self.host}:{self.port}")
         else:
-            self.port = self.q.port
+            args.set("Host", self.host)
 
-        if (self.q.path == ""):
-            self.path = "/"
-        else:
-            self.path = self.q.path
+        args.merge(user_args)
 
-    async def _read_http_header(self) -> bytes:
+        if (args.get("User-Agent") == ""):
+            args.set("User-Agent", self.ua)
 
+        req = [f"GET {query} HTTP/{http_version}"]
+
+        req.extend(args.get_all())
+
+        req_str = '\r\n'.join(req)
+        req_str += "\r\n\r\n"
+
+        self.writer.write(req_str.encode("utf-8"))
+        await self.writer.drain()
+
+    async def read_header(self) -> str:
         header = b""
 
         while (True):
@@ -63,153 +71,162 @@ class AsyncHttpConnection():
             if (line_len == 2):
                 break
 
-        return header
+        return header.decode("utf-8")
 
     async def connect(self) -> None:
 
-        if ("https" == self.q.scheme):
+        if (self.secure):
             context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
             context.check_hostname = True
             context.verify_mode = ssl.CERT_REQUIRED
-            io = await asyncio.open_connection(self.q.hostname,
+            io = await asyncio.open_connection(self.host,
                                                self.port,
                                                ssl=context)
         else:
-            io = await asyncio.open_connection(self.q.hostname,
-                                               self.port)
+            io = await asyncio.open_connection(self.host, self.port)
 
         self.reader = io[0]
         self.writer = io[1]
 
-        args = AsyncHttpArgs()
-
-        if (self.q.hostname is not None):
-            if (self.port != 80 and self.port != 443):
-                args.set("Host", f"{self.q.hostname}:{self.port}")
-            else:
-                args.set("Host", self.q.hostname)
-
-        args.set("User-Agent", self.ua)
-
-        if (self.q.query is not None and '' != self.q.query):
-            req = [f"GET {self.path}?{self.q.query} HTTP/1.0"]
-        else:
-            req = [f"GET {self.path} HTTP/1.0"]
-
-        req.extend(args.get_all())
-
-        req_str = '\r\n'.join(req)
-        req_str += "\r\n\r\n"
-
-        self.writer.write(req_str.encode("utf-8"))
-        await self.writer.drain()
-
-        self.response_bytes = await self._read_http_header()
-
-        if (self.response_bytes == b''):
-            raise AsyncHttpException("Empty response")
-
-        src = FakeSocket(self.response_bytes)
-        self.res = HTTPResponse(src)  # type: ignore
-        self.res.begin()
-
     async def close(self) -> None:
-        if (self.writer is not None):
+        if (self.writer):
             self.writer.close()
             await self.writer.wait_closed()
-            self.writer = None
 
+    async def read_all(self, size: int) -> bytes:
+        data = b''
+        offset = 0
 
-class AsyncHttpClient():
-    def __init__(self, url: str) -> None:
-        self.url = url
-        self.conn = None
+        while (offset < size):
 
-    async def __aenter__(self):
+            read_len = min((size - offset), DEF_IO_SIZE)
 
-        success = False
-        # 3 for:
-        # 1. http -> https
-        # 2. www -> bleh
-        max_attempts = 3
-        retry = True
-        url = self.url
+            chunk = await self.reader.read(read_len)
+            chunk_len = len(chunk)
 
-        while (False == success and max_attempts > 0 and True == retry):
-
-            retry = False
-
-            conn = AsyncHttpConnection(url)
-            try:
-                await conn.connect()
-                if (conn.res.status >= 200 and conn.res.status < 300):
-                    success = True
-                if (HTTPStatus.FOUND == conn.res.status or
-                        HTTPStatus.MOVED_PERMANENTLY == conn.res.status):
-                    new_url = conn.res.getheader("Location")
-                    if (new_url is not None):
-                        url = new_url
-                        retry = True
-                    else:
-                        raise AsyncHttpException("Invalid redirect")
-            except socket.gaierror as e:
-                raise AsyncHttpException(f"Unable to connect {e}")
-            finally:
-                max_attempts -= 1
-                if (False == success):
-                    await conn.close()
-                else:
-                    self.conn = conn
-
-        if (self.conn is None):
-            raise AsyncHttpException(f"Connection Failure to {url}")
-
-        return self
-
-    async def __aexit__(self, type, value, traceback) -> None:
-        if (self.conn is not None):
-            await self.conn.close()
-            self.conn = None
-
-    async def close(self) -> None:
-        if (self.conn is not None):
-            await self.conn.close()
-            self.conn = None
-
-    ############################################################################
-    # PUBLIC
-    ############################################################################
-
-    async def stream(self, bytes_count: int = DEF_READ_CHUNK_SIZE) -> AsyncGenerator[bytes, None]:
-        if (self.conn is None):
-            raise AsyncHttpException("Not connected")
-
-        while (True):
-            data = await self.conn.reader.read(bytes_count)
-
-            if (len(data) == 0 or data == b''):
+            if (chunk_len == 0):
                 break
 
-            yield data
+            data += chunk
+            offset += chunk_len
 
-    def get_response_raw(self) -> bytes:
-        if (self.conn is None):
-            raise AsyncHttpException("Not connected")
-        return self.conn.response_bytes
+        return data
 
-    def get_rw(self) -> Tuple[StreamReader, StreamWriter]:
-        if (self.conn is None or self.conn.writer is None):
-            raise AsyncHttpException("Not connected")
-        return (self.conn.reader, self.conn.writer)
 
-    async def read(self, bytes_count: int = DEF_READ_CHUNK_SIZE) -> bytes:
-        if (self.conn is None):
-            raise AsyncHttpException("Not connected")
-        return await self.conn.reader.read(bytes_count)
+class AsyncHttpResponse:
+    def __init__(self, conn: AsyncHttpConnection, header: str) -> None:
+        self.status = 0
+        self.args = AsyncHttpArgs()
+        self.con = conn
+        self.status = HTTPStatus.INTERNAL_SERVER_ERROR
 
-    def get_header_int(self, key: str) -> Union[int, None]:
-        if (self.conn is None):
-            raise AsyncHttpException("Not connected")
-        if (key in self.conn.res.headers):
-            return int(self.conn.res.headers[key])
-        return None
+        self._parse_header(header)
+
+    def _parse_header(self, header: str) -> None:
+
+        for line in header.split("\r\n"):
+            if (line.startswith("HTTP/")):
+                self.status = int(line.split(" ")[1])
+            elif ('' != line):
+                k, v = line.split(":", 1)
+                self.args.set(k, v.lstrip())
+
+    def get_header(self, key: str) -> str:
+        return self.args.get(key)
+
+    def get_header_int(self, key: str) -> int:
+        return self.args.get_int(key)
+
+    async def read(self, size: int) -> bytes:
+        return await self.con.reader.read(size)
+
+    async def read_chunked(self) -> bytes:
+
+        data = b''
+
+        while (True):
+            chunk_line = await self.con.reader.readline()
+
+            if (b'' == chunk_line or 2 == len(chunk_line)):
+                # end of a chunk
+                continue
+
+            sep = chunk_line.index(b"\r")
+            chunk_line = chunk_line[:sep]
+
+            chunk_len = int(chunk_line, 16)
+
+            if (chunk_len == 0):
+                await self.con.reader.readline()  # empty the socket
+                break
+            elif (chunk_len < 0):
+                ValueError(f"invalid chunk size ({chunk_len})")
+
+            data += await self.con.read_all(chunk_len)
+
+        return data
+
+    async def read_all(self) -> bytes:
+
+        if (self.args.get("Transfer-Encoding") == "chunked"):
+            return await self.read_chunked()
+
+        content_len = self.args.get_int("Content-Length")
+
+        if (0 == content_len):
+            return b''
+        if (content_len > 0):
+            return await self.con.read_all(content_len)
+
+        raise ValueError("Invalid response")
+
+
+class AsyncHttpClient:
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.q = urllib.parse.urlparse(url)
+        self.header = AsyncHttpArgs()
+
+        if (self.q.hostname is None):
+            raise ValueError("Invalid URL")
+
+        self.host = self.q.hostname
+        self.secure = self.q.scheme == "https"
+
+    async def __str__(self) -> str:
+        return self.url
+
+    async def _connect(self) -> None:
+        if (self.q.port is None):
+            if (self.secure):
+                self.port = 443
+            else:
+                self.port = 80
+        else:
+            self.port = self.q.port
+
+        self.conn = AsyncHttpConnection(self.host, self.port, self.secure)
+        await self.conn.connect()
+
+    async def __aenter__(self) -> 'AsyncHttpClient':
+        await self._connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+
+        try:
+            await self.conn.close()
+        except:
+            pass
+
+    ############################################################################
+    # PUBLIC METHODS
+    ############################################################################
+
+    def add_header(self, key: str, value: str) -> None:
+        self.header.set(key, value)
+
+    async def send_request(self, method: str, query: str, http_version: str = "1.1") -> AsyncHttpResponse:
+        await self.conn.send_request(method, query, self.header, http_version)
+        header = await self.conn.read_header()
+        return AsyncHttpResponse(self.conn, header)

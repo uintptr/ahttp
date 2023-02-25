@@ -14,6 +14,7 @@ from datetime import datetime
 from dataclasses import dataclass
 import re
 import time
+import socket
 
 from .asynchttpcommon import HttpRequest, AsyncHttpArgs
 from .asynchttpcommon import AsyncHttpNotImplemented
@@ -132,6 +133,12 @@ class AsyncHttpRequest():
         self.add_header("Content-Type", "application/json")
         await self.send_headers()
         self.writer.write(json_bytes)
+        await self.writer.drain()
+
+    async def send_data(self, data: bytes) -> None:
+        self.add_header("Content-Length", str(len(data)))
+        await self.send_headers()
+        self.writer.write(data)
         await self.writer.drain()
 
     async def read_as_json(self) -> Dict:
@@ -493,6 +500,9 @@ class AsyncHttpServer():
                     break
                 except BrokenPipeError:
                     self.logger.log(f"Broken pipe ({peer_info})")
+                    break
+                except socket.gaierror:
+                    self.logger.log(f"Socket error ({peer_info})")
                     break
                 # we can send something to the client here
                 except AsyncHttpException as e:
