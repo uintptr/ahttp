@@ -196,7 +196,21 @@ class AsyncHttpClient:
     async def __str__(self) -> str:
         return self.url
 
-    async def _connect(self) -> None:
+    async def __aenter__(self) -> 'AsyncHttpClient':
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
+
+    ############################################################################
+    # PUBLIC METHODS
+    ############################################################################
+
+    async def close(self) -> None:
+        await self.conn.close()
+
+    async def connect(self) -> None:
         if (self.q.port is None):
             if (self.secure):
                 self.port = 443
@@ -207,21 +221,6 @@ class AsyncHttpClient:
 
         self.conn = AsyncHttpConnection(self.host, self.port, self.secure)
         await self.conn.connect()
-
-    async def __aenter__(self) -> 'AsyncHttpClient':
-        await self._connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-
-        try:
-            await self.conn.close()
-        except:
-            pass
-
-    ############################################################################
-    # PUBLIC METHODS
-    ############################################################################
 
     def add_header(self, key: str, value: str) -> None:
         self.header.set(key, value)
