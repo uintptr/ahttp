@@ -225,7 +225,23 @@ class AsyncHttpClient:
     def add_header(self, key: str, value: str) -> None:
         self.header.set(key, value)
 
-    async def send_request(self, method: str, query: str, http_version: str = "1.1") -> AsyncHttpResponse:
-        await self.conn.send_request(method, query, self.header, http_version)
+    async def get(self, query: str, http_version: str = "1.1") -> AsyncHttpResponse:
+
+        await self.conn.send_request("GET", query, self.header, http_version)
         header = await self.conn.read_header()
-        return AsyncHttpResponse(self.conn, header)
+        resp = AsyncHttpResponse(self.conn, header)
+
+        if (HTTPStatus.FOUND == resp.status):
+            await self.close()
+
+            new_url = resp.get_header("Location")
+
+            if (new_url is not None and new_url != ""):
+                self.q = urllib.parse.urlparse(new_url)
+
+            await self.connect()
+            await self.conn.send_request("GET", self.q.path, self.header, http_version)
+            header = await self.conn.read_header()
+            resp = AsyncHttpResponse(self.conn, header)
+
+        return resp
