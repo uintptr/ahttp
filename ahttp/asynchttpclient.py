@@ -231,7 +231,8 @@ class AsyncHttpClient:
         header = await self.conn.read_header()
         resp = AsyncHttpResponse(self.conn, header)
 
-        if (HTTPStatus.FOUND == resp.status):
+        if (HTTPStatus.FOUND == resp.status or
+            HTTPStatus.MOVED_PERMANENTLY == resp.status):
             await self.close()
 
             new_url = resp.get_header("Location")
