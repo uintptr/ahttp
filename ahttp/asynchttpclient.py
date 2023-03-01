@@ -32,6 +32,26 @@ class AsyncHttpConnection:
     # PUBLIC METHODS
     ############################################################################
 
+    async def connect(self) -> None:
+
+        if (self.secure):
+            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            io = await asyncio.open_connection(self.host,
+                                               self.port,
+                                               ssl=context)
+        else:
+            io = await asyncio.open_connection(self.host, self.port)
+
+        self.reader = io[0]
+        self.writer = io[1]
+
+    async def close(self) -> None:
+        if (self.writer):
+            self.writer.close()
+            await self.writer.wait_closed()
+
     async def send_request(self, method: str, query: str, user_args: AsyncHttpArgs, http_version: str = "1.0") -> None:
 
         args = AsyncHttpArgs()
@@ -46,7 +66,7 @@ class AsyncHttpConnection:
         if (args.get("User-Agent") == ""):
             args.set("User-Agent", self.ua)
 
-        req = [f"GET {query} HTTP/{http_version}"]
+        req = [f"{method} {query} HTTP/{http_version}"]
 
         req.extend(args.get_all())
 
@@ -72,26 +92,6 @@ class AsyncHttpConnection:
                 break
 
         return header.decode("utf-8")
-
-    async def connect(self) -> None:
-
-        if (self.secure):
-            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            context.check_hostname = True
-            context.verify_mode = ssl.CERT_REQUIRED
-            io = await asyncio.open_connection(self.host,
-                                               self.port,
-                                               ssl=context)
-        else:
-            io = await asyncio.open_connection(self.host, self.port)
-
-        self.reader = io[0]
-        self.writer = io[1]
-
-    async def close(self) -> None:
-        if (self.writer):
-            self.writer.close()
-            await self.writer.wait_closed()
 
     async def read_all(self, size: int) -> bytes:
         data = b''
@@ -238,6 +238,7 @@ class AsyncHttpClient:
 
             if (new_url is not None and new_url != ""):
                 self.q = urllib.parse.urlparse(new_url)
+                self.host = self.q.hostname
 
             await self.connect()
             await self.conn.send_request("GET", self.q.path, self.header, http_version)
