@@ -183,6 +183,9 @@ class AsyncHttpResponse:
 
 class AsyncHttpClient:
     def __init__(self, url: str) -> None:
+        self._load_url(url)
+
+    def _load_url(self, url):
         self.url = url
         self.q = urllib.parse.urlparse(url)
         self.header = AsyncHttpArgs()
@@ -231,15 +234,13 @@ class AsyncHttpClient:
         header = await self.conn.read_header()
         resp = AsyncHttpResponse(self.conn, header)
 
-        if (HTTPStatus.FOUND == resp.status or
-            HTTPStatus.MOVED_PERMANENTLY == resp.status):
+        if (301 == resp.status or 302 == resp.status):
             await self.close()
 
             new_url = resp.get_header("Location")
 
             if (new_url is not None and new_url != ""):
-                self.q = urllib.parse.urlparse(new_url)
-                self.host = self.q.hostname
+                self._load_url(new_url)
 
             await self.connect()
             await self.conn.send_request("GET", self.q.path, self.header, http_version)
