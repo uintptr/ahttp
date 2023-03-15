@@ -52,7 +52,7 @@ class AsyncHttpConnection:
             self.writer.close()
             await self.writer.wait_closed()
 
-    async def send_request(self, method: str, query: str, user_args: AsyncHttpArgs, http_version: str = "1.0") -> None:
+    async def send_request(self, method: str, query: str, user_args: AsyncHttpArgs, http_version: str = "1.0", data: bytes = b'') -> None:
 
         args = AsyncHttpArgs()
 
@@ -66,6 +66,9 @@ class AsyncHttpConnection:
         if (args.get("User-Agent") == ""):
             args.set("User-Agent", self.ua)
 
+        if (len(data) > 0):
+            args.set("Content-Length", str(len(data)))
+
         req = [f"{method} {query} HTTP/{http_version}"]
 
         req.extend(args.get_all())
@@ -73,7 +76,12 @@ class AsyncHttpConnection:
         req_str = '\r\n'.join(req)
         req_str += "\r\n\r\n"
 
-        self.writer.write(req_str.encode("utf-8"))
+        req_bytes = req_str.encode("utf-8")
+
+        if (len(data) > 0):
+            req_bytes += data
+
+        self.writer.write(req_bytes)
         await self.writer.drain()
 
     async def read_header(self) -> str:
@@ -206,6 +214,27 @@ class AsyncHttpClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
+    async def _init_request(self, method: str, query: str, http_version: str = "1.1", data: bytes = b'') -> AsyncHttpResponse:
+
+        await self.conn.send_request(method, query, self.header, http_version, data=data)
+        header = await self.conn.read_header()
+        resp = AsyncHttpResponse(self.conn, header)
+
+        if (301 == resp.status or 302 == resp.status):
+            await self.close()
+
+            new_url = resp.get_header("Location")
+
+            if (new_url is not None and new_url != ""):
+                self._load_url(new_url)
+
+            await self.connect()
+            await self.conn.send_request(method, self.q.path, self.header, http_version, data=data)
+            header = await self.conn.read_header()
+            resp = AsyncHttpResponse(self.conn, header)
+
+        return resp
+
     ############################################################################
     # PUBLIC METHODS
     ############################################################################
@@ -248,3 +277,6 @@ class AsyncHttpClient:
             resp = AsyncHttpResponse(self.conn, header)
 
         return resp
+
+    async def post(self, query: str, http_version: str = "1.1", data: bytes = b'') -> AsyncHttpResponse:
+        return await self._init_request("POST", query, http_version, data)
